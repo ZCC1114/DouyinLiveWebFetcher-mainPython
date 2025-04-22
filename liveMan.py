@@ -96,6 +96,7 @@ class DouyinLiveWebFetcher:
         :param live_id: 直播间的直播id，打开直播间web首页的链接如：https://live.douyin.com/261378947940，
                         其中的261378947940即是live_id
         """
+        self._closed = False  # ✅ 新增：关闭标志
         self.__ttwid = None
         self.__room_id = None
         self.live_id = live_id
@@ -110,8 +111,13 @@ class DouyinLiveWebFetcher:
         threading.Thread(target=self._connectWebSocket, daemon=True).start()
     
     def stop(self):
-        self.ws.close()
-    
+        self._closed = True  # 标志关闭
+        try:
+            if hasattr(self, 'ws'):
+                self.ws.close()
+        except Exception as e:
+            print(f"关闭WebSocket出错: {e}")
+
     @property
     def ttwid(self):
         """
@@ -223,21 +229,17 @@ class DouyinLiveWebFetcher:
         except Exception:
             self.stop()
             raise
-    
+
     def _sendHeartbeat(self):
-        """
-        发送心跳包
-        """
-        while True:
+        while not self._closed:
             try:
                 heartbeat = PushFrame(payload_type='hb').SerializeToString()
                 self.ws.send(heartbeat, websocket.ABNF.OPCODE_PING)
                 print("【√】发送心跳包")
             except Exception as e:
-                print("【X】心跳包检测错误: ", e)
+                print("【X】心跳包发送失败: ", e)
                 break
-            else:
-                time.sleep(5)
+            time.sleep(5)
     
     def _wsOnOpen(self, ws):
         """
@@ -270,6 +272,7 @@ class DouyinLiveWebFetcher:
             method = msg.method
             try:
                 {
+                    'WebcastRoomMessage': self._parseRoomMsg,  # 直播间信息
                     'WebcastChatMessage': self._parseChatMsg,  # 聊天消息
                 }.get(method)(msg.payload)
             except Exception:
@@ -281,13 +284,20 @@ class DouyinLiveWebFetcher:
     def _wsOnClose(self, ws, *args):
         self.get_room_status()
         print("WebSocket connection closed.")
-    
+
+    def _parseRoomMsg(self, payload):
+        message = RoomMessage().parse(payload)
+        common = message.common
+        room_id = common.room_id
+        print(f"【直播间msg】直播间id:{room_id}")
+
     def _parseChatMsg(self, payload):
         """聊天消息"""
         message = ChatMessage().parse(payload)
         user_name = message.user.nick_name
         user_id = message.user.id
         content = message.content
+        # dyLiveId = common.room_id
         print(f"【聊天msg】[{user_id}]{user_name}: {content}")
         data = {
             "type": "chat",
@@ -297,15 +307,10 @@ class DouyinLiveWebFetcher:
             "timestamp": time.time()
         }
 
-        # 打印data内容
-        print("准备发送的数据:", data)
-
         if self.callback:
-            print("回调函数存在，准备调用...")
             try:
                 # 直接调用回调，不再创建新任务（由ConnectionManager处理异步）
                 self.callback(data)  # 注意这里不再用asyncio.create_task
-                print("回调已执行")
             except Exception as e:
                 print(f"回调执行失败: {e}")
     

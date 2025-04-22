@@ -2,9 +2,8 @@ import asyncio
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
-import uvicorn
-import threading
-import json
+from fastapi.responses import JSONResponse
+
 
 from starlette.middleware.cors import CORSMiddleware
 
