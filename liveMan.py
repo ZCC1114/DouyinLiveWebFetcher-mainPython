@@ -306,11 +306,10 @@ class DouyinLiveWebFetcher:
             "content": message.content,
             "timestamp": time.time()
         }
-
+        json_data = json.dumps(data, ensure_ascii=False)  # 转换为JSON字符串
         if self.callback:
             try:
-                # 直接调用回调，不再创建新任务（由ConnectionManager处理异步）
-                self.callback(data)  # 注意这里不再用asyncio.create_task
+                self.callback(json_data)
             except Exception as e:
                 print(f"回调执行失败: {e}")
     

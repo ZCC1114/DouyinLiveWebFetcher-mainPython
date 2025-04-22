@@ -1,13 +1,10 @@
-# main.py
 import asyncio
 import json
 import threading
-
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
-
-from starlette.websockets import WebSocketDisconnect
-
+from fastapi.responses import JSONResponse
+from starlette.middleware.cors import CORSMiddleware
 from liveMan import DouyinLiveWebFetcher
 
 app = FastAPI()
@@ -16,44 +13,66 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, Set[WebSocket]] = {}
         self.fetchers: Dict[str, DouyinLiveWebFetcher] = {}
-        self.lock = threading.Lock()  # 新增：锁
+        self.lock = threading.Lock()
         self.loop = asyncio.get_event_loop()
 
     async def connect(self, websocket: WebSocket, live_id: str):
-        print(f"🟢 新客户端连接，直播间ID: {live_id}")  # 调试打印
-        if live_id not in self.active_connections:
-            self.active_connections[live_id] = set()
-            self.fetchers[live_id] = DouyinLiveWebFetcher(live_id)
-            self.fetchers[live_id].start(
-                callback=lambda msg: asyncio.run_coroutine_threadsafe(self.broadcast(live_id, msg), self.loop)
-            )
+        await websocket.accept()
+
+        with self.lock:
+            if live_id not in self.active_connections:
+                self.active_connections[live_id] = set()
+                # 仅当没有抓取器时才创建新实例
+                if live_id not in self.fetchers:
+                    self.fetchers[live_id] = DouyinLiveWebFetcher(live_id)
+                    self.fetchers[live_id].start(
+                        callback=lambda msg: asyncio.run_coroutine_threadsafe(
+                            self.broadcast(live_id, json.loads(msg)),  # 确保传入的是dict
+                            self.loop
+                        )
+                    )
+
             self.active_connections[live_id].add(websocket)
-            print(f"当前活跃连接数: {len(self.active_connections[live_id])}")
+            print(f"🟢 新客户端连接 ({len(self.active_connections[live_id])}个): {live_id}")
 
-    async def broadcast(self, live_id: str, message: dict):
+    async def broadcast(self, live_id: str, message: dict):  # 注意参数类型改为dict
         if live_id not in self.active_connections:
+            print(f"⚠️ 无活跃连接: {live_id}")
             return
+
+        clients = list(self.active_connections[live_id])
+        print(f"📢 准备向 {len(clients)} 个客户端广播消息")
+
         tasks = []
-        for ws in list(self.active_connections[live_id]):
-            tasks.append(self._safe_send(ws, live_id, message))
-        await asyncio.gather(*tasks, return_exceptions=True)
+        for connection in clients:
+            try:
+                # 确保转换为JSON字符串
+                json_message = json.dumps(message, ensure_ascii=False)
+                print(f"✉️ 发送消息: {json_message[:100]}...")  # 打印前100字符
+                await connection.send_text(json_message)
+                print("✅ 发送成功")
+            except Exception as e:
+                print(f"❌ 发送失败: {str(e)[:200]}")  # 截断长错误信息
+                await self.remove(connection, live_id)
 
-    async def _safe_send(self, websocket: WebSocket, live_id: str, message: dict):
-        try:
-            await websocket.send_text(json.dumps(message))
-        except Exception as e:
-            print(f"发送失败，移除连接: {e}")
-            with self.lock:
-                self.remove(websocket, live_id)
+    async def remove(self, websocket: WebSocket, live_id: str):
+        with self.lock:
+            if live_id in self.active_connections:
+                self.active_connections[live_id].discard(websocket)
+                if not self.active_connections[live_id]:
+                    print(f"💤 没有客户端了，关闭 {live_id} 的抓取器")
+                    self.fetchers[live_id].stop()
+                    del self.fetchers[live_id]
+                    del self.active_connections[live_id]
 
-    def remove(self, websocket: WebSocket, live_id: str):
-        if live_id in self.active_connections:
-            self.active_connections[live_id].discard(websocket)
-            if not self.active_connections[live_id]:
-                print(f"💤 没有客户端了，关闭 {live_id} 的抓取器")
-                self.fetchers[live_id].stop()
-                del self.fetchers[live_id]
-                del self.active_connections[live_id]
+# 添加 CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 manager = ConnectionManager()
 
@@ -63,13 +82,20 @@ async def reject_root(websocket: WebSocket):
     await websocket.close(code=4001)
 
 @app.websocket("/ws/{live_id}")
-async def valid_endpoint(websocket: WebSocket, live_id: str):
-    await websocket.accept()  # 关键：必须先调用 accept()
+async def websocket_endpoint(websocket: WebSocket, live_id: str):
+    await manager.connect(websocket, live_id)
     try:
-        await manager.connect(websocket, live_id)
         while True:
-            await websocket.receive_text()  # 维持连接
+            # 维持连接活跃
+            data = await websocket.receive_text()
+            print(f"收到客户端心跳: {data}")
     except WebSocketDisconnect:
-        manager.remove(websocket, live_id)
+        print("客户端主动断开")
+        await manager.remove(websocket, live_id)
     except Exception as e:
         print(f"连接异常: {e}")
+        await manager.remove(websocket, live_id)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8765)
