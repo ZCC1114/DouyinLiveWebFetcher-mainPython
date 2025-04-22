@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # coding:utf-8
-
+import asyncio
 # @FileName:    liveMan.py
 # @Time:        2024/1/2 21:51
 # @Author:      bubu
@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import json
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -101,9 +102,12 @@ class DouyinLiveWebFetcher:
         self.live_url = "https://live.douyin.com/"
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " \
                           "Chrome/120.0.0.0 Safari/537.36"
-    
-    def start(self):
-        self._connectWebSocket()
+        self.callback = None  # 消息回调函数
+
+
+    def start(self, callback):
+        self.callback = callback
+        threading.Thread(target=self._connectWebSocket, daemon=True).start()
     
     def stop(self):
         self.ws.close()
@@ -267,18 +271,6 @@ class DouyinLiveWebFetcher:
             try:
                 {
                     'WebcastChatMessage': self._parseChatMsg,  # 聊天消息
-                    'WebcastGiftMessage': self._parseGiftMsg,  # 礼物消息
-                    'WebcastLikeMessage': self._parseLikeMsg,  # 点赞消息
-                    'WebcastMemberMessage': self._parseMemberMsg,  # 进入直播间消息
-                    'WebcastSocialMessage': self._parseSocialMsg,  # 关注消息
-                    'WebcastRoomUserSeqMessage': self._parseRoomUserSeqMsg,  # 直播间统计
-                    'WebcastFansclubMessage': self._parseFansclubMsg,  # 粉丝团消息
-                    'WebcastControlMessage': self._parseControlMsg,  # 直播间状态消息
-                    'WebcastEmojiChatMessage': self._parseEmojiChatMsg,  # 聊天表情包消息
-                    'WebcastRoomStatsMessage': self._parseRoomStatsMsg,  # 直播间统计信息
-                    'WebcastRoomMessage': self._parseRoomMsg,  # 直播间信息
-                    'WebcastRoomRankMessage': self._parseRankMsg,  # 直播间排行榜信息
-                    'WebcastRoomStreamAdaptationMessage': self._parseRoomStreamAdaptationMsg,  # 直播间流配置
                 }.get(method)(msg.payload)
             except Exception:
                 pass
@@ -297,74 +289,25 @@ class DouyinLiveWebFetcher:
         user_id = message.user.id
         content = message.content
         print(f"【聊天msg】[{user_id}]{user_name}: {content}")
-    
-    def _parseGiftMsg(self, payload):
-        """礼物消息"""
-        message = GiftMessage().parse(payload)
-        user_name = message.user.nick_name
-        gift_name = message.gift.name
-        gift_cnt = message.combo_count
-        print(f"【礼物msg】{user_name} 送出了 {gift_name}x{gift_cnt}")
-    
-    def _parseLikeMsg(self, payload):
-        '''点赞消息'''
-        message = LikeMessage().parse(payload)
-        user_name = message.user.nick_name
-        count = message.count
-        print(f"【点赞msg】{user_name} 点了{count}个赞")
-    
-    def _parseMemberMsg(self, payload):
-        '''进入直播间消息'''
-        message = MemberMessage().parse(payload)
-        user_name = message.user.nick_name
-        user_id = message.user.id
-        gender = ["女", "男"][message.user.gender]
-        print(f"【进场msg】[{user_id}][{gender}]{user_name} 进入了直播间")
-    
-    def _parseSocialMsg(self, payload):
-        '''关注消息'''
-        message = SocialMessage().parse(payload)
-        user_name = message.user.nick_name
-        user_id = message.user.id
-        print(f"【关注msg】[{user_id}]{user_name} 关注了主播")
-    
-    def _parseRoomUserSeqMsg(self, payload):
-        '''直播间统计'''
-        message = RoomUserSeqMessage().parse(payload)
-        current = message.total
-        total = message.total_pv_for_anchor
-        print(f"【统计msg】当前观看人数: {current}, 累计观看人数: {total}")
-    
-    def _parseFansclubMsg(self, payload):
-        '''粉丝团消息'''
-        message = FansclubMessage().parse(payload)
-        content = message.content
-        print(f"【粉丝团msg】 {content}")
-    
-    def _parseEmojiChatMsg(self, payload):
-        '''聊天表情包消息'''
-        message = EmojiChatMessage().parse(payload)
-        emoji_id = message.emoji_id
-        user = message.user
-        common = message.common
-        default_content = message.default_content
-        print(f"【聊天表情包id】 {emoji_id},user：{user},common:{common},default_content:{default_content}")
-    
-    def _parseRoomMsg(self, payload):
-        message = RoomMessage().parse(payload)
-        common = message.common
-        room_id = common.room_id
-        print(f"【直播间msg】直播间id:{room_id}")
-    
-    def _parseRoomStatsMsg(self, payload):
-        message = RoomStatsMessage().parse(payload)
-        display_long = message.display_long
-        print(f"【直播间统计msg】{display_long}")
-    
-    def _parseRankMsg(self, payload):
-        message = RoomRankMessage().parse(payload)
-        ranks_list = message.ranks_list
-        print(f"【直播间排行榜msg】{ranks_list}")
+        data = {
+            "type": "chat",
+            "user_id": message.user.id,
+            "username": message.user.nick_name,
+            "content": message.content,
+            "timestamp": time.time()
+        }
+
+        # 打印data内容
+        print("准备发送的数据:", data)
+
+        if self.callback:
+            print("回调函数存在，准备调用...")
+            try:
+                # 直接调用回调，不再创建新任务（由ConnectionManager处理异步）
+                self.callback(data)  # 注意这里不再用asyncio.create_task
+                print("回调已执行")
+            except Exception as e:
+                print(f"回调执行失败: {e}")
     
     def _parseControlMsg(self, payload):
         '''直播间状态消息'''
@@ -374,7 +317,3 @@ class DouyinLiveWebFetcher:
             print("直播间已结束")
             self.stop()
     
-    def _parseRoomStreamAdaptationMsg(self, payload):
-        message = RoomStreamAdaptationMessage().parse(payload)
-        adaptationType = message.adaptation_type
-        print(f'直播间adaptation: {adaptationType}')
