@@ -89,7 +89,7 @@ def generateMsToken(length=107):
 
 
 class DouyinLiveWebFetcher:
-    
+
     def __init__(self, live_id):
         """
         直播间弹幕抓取对象
@@ -109,7 +109,7 @@ class DouyinLiveWebFetcher:
     def start(self, callback):
         self.callback = callback
         threading.Thread(target=self._connectWebSocket, daemon=True).start()
-    
+
     def stop(self):
         self._closed = True  # 标志关闭
         try:
@@ -137,7 +137,7 @@ class DouyinLiveWebFetcher:
         else:
             self.__ttwid = response.cookies.get('ttwid')
             return self.__ttwid
-    
+
     @property
     def room_id(self):
         """
@@ -160,11 +160,11 @@ class DouyinLiveWebFetcher:
             match = re.search(r'roomId\\":\\"(\d+)\\"', response.text)
             if match is None or len(match.groups()) < 1:
                 print("【X】No match found for roomId")
-            
+
             self.__room_id = match.group(1)
-            
+
             return self.__room_id
-    
+
     def get_room_status(self):
         """
         获取直播间开播状态:
@@ -190,7 +190,7 @@ class DouyinLiveWebFetcher:
             user_id = user.get('id_str')
             nickname = user.get('nickname')
             print(f"【{nickname}】[{user_id}]直播间：{['正在直播', '已结束'][bool(room_status)]}.")
-    
+
     def _connectWebSocket(self):
         """
         连接抖音直播间websocket服务器，请求直播间数据
@@ -210,10 +210,10 @@ class DouyinLiveWebFetcher:
                f"&host=https://live.douyin.com&aid=6383&live_id=1&did_rule=3&endpoint=live_pc&support_wrds=1"
                f"&user_unique_id=7319483754668557238&im_path=/webcast/im/fetch/&identity=audience"
                f"&need_persist_msg_count=15&insert_task_id=&live_reason=&room_id={self.room_id}&heartbeatDuration=0")
-        
+
         signature = generateSignature(wss)
         wss += f"&signature={signature}"
-        
+
         headers = {
             "cookie": f"ttwid={self.ttwid}",
             'user-agent': self.user_agent,
@@ -240,25 +240,25 @@ class DouyinLiveWebFetcher:
                 print("【X】心跳包发送失败: ", e)
                 break
             time.sleep(5)
-    
+
     def _wsOnOpen(self, ws):
         """
         连接建立成功
         """
         print("【√】WebSocket连接成功.")
         threading.Thread(target=self._sendHeartbeat).start()
-    
+
     def _wsOnMessage(self, ws, message):
         """
         接收到数据
         :param ws: websocket实例
         :param message: 数据
         """
-        
+
         # 根据proto结构体解析对象
         package = PushFrame().parse(message)
         response = Response().parse(gzip.decompress(package.payload))
-        
+
         # 返回直播间服务器链接存活确认消息，便于持续获取数据
         if response.need_ack:
             ack = PushFrame(log_id=package.log_id,
@@ -266,30 +266,23 @@ class DouyinLiveWebFetcher:
                             payload=response.internal_ext.encode('utf-8')
                             ).SerializeToString()
             ws.send(ack, websocket.ABNF.OPCODE_BINARY)
-        
+
         # 根据消息类别解析消息体
         for msg in response.messages_list:
             method = msg.method
             try:
                 {
-                    'WebcastRoomMessage': self._parseRoomMsg,  # 直播间信息
                     'WebcastChatMessage': self._parseChatMsg,  # 聊天消息
                 }.get(method)(msg.payload)
             except Exception:
                 pass
-    
+
     def _wsOnError(self, ws, error):
         print("WebSocket error: ", error)
-    
+
     def _wsOnClose(self, ws, *args):
         self.get_room_status()
         print("WebSocket connection closed.")
-
-    def _parseRoomMsg(self, payload):
-        message = RoomMessage().parse(payload)
-        common = message.common
-        room_id = common.room_id
-        print(f"【直播间msg】直播间id:{room_id}")
 
     def _parseChatMsg(self, payload):
         """聊天消息"""
@@ -297,8 +290,8 @@ class DouyinLiveWebFetcher:
         user_name = message.user.nick_name
         user_id = message.user.id
         content = message.content
-        # dyLiveId = common.room_id
-        print(f"【聊天msg】[{user_id}]{user_name}: {content}")
+        dy_live_Id = message.common.room_id
+        print(f"【聊天msg】[{dy_live_Id}] [{user_id}]{user_name}: {content}")
         data = {
             "type": "chat",
             "user_id": message.user.id,
@@ -312,11 +305,10 @@ class DouyinLiveWebFetcher:
                 self.callback(json_data)
             except Exception as e:
                 print(f"回调执行失败: {e}")
-    
+
     def _parseControlMsg(self, payload):
         '''直播间状态消息'''
         message = ControlMessage().parse(payload)
-        
         if message.status == 3:
             print("直播间已结束")
             self.stop()

@@ -33,7 +33,7 @@ class ConnectionManager:
                     )
 
             self.active_connections[live_id].add(websocket)
-            print(f"🟢 新客户端连接 ({len(self.active_connections[live_id])}个): {live_id}")
+            # print(f"🟢 新客户端连接 ({len(self.active_connections[live_id])}个): {live_id}")
 
     async def broadcast(self, live_id: str, message: dict):  # 注意参数类型改为dict
         if live_id not in self.active_connections:
@@ -41,16 +41,15 @@ class ConnectionManager:
             return
 
         clients = list(self.active_connections[live_id])
-        print(f"📢 准备向 {len(clients)} 个客户端广播消息")
+        # print(f"📢 准备向 {len(clients)} 个客户端广播消息")
 
-        tasks = []
         for connection in clients:
             try:
                 # 确保转换为JSON字符串
                 json_message = json.dumps(message, ensure_ascii=False)
-                print(f"✉️ 发送消息: {json_message[:100]}...")  # 打印前100字符
+                # print(f"✉️ 发送消息: {json_message[:100]}...")  # 打印前100字符
                 await connection.send_text(json_message)
-                print("✅ 发送成功")
+                # print("✅ 发送成功")
             except Exception as e:
                 print(f"❌ 发送失败: {str(e)[:200]}")  # 截断长错误信息
                 await self.remove(connection, live_id)
