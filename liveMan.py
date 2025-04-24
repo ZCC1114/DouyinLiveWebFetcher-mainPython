@@ -17,14 +17,20 @@ import threading
 import time
 import urllib.parse
 import json
+import uuid
 from contextlib import contextmanager
+from typing import Optional
 from unittest.mock import patch
 
 import requests
 import websocket
 from py_mini_racer import MiniRacer
 
+from FsBlackRedisVo import FsBlackRedisVo
+from TagUserVo import TagUserVo
 from protobuf.douyin import *
+from redis_helper import redis_client
+
 
 
 @contextmanager
@@ -241,20 +247,19 @@ class DouyinLiveWebFetcher:
                 break
             time.sleep(5)
 
+    """
+      抖音client连接建立成功
+    """
     def _wsOnOpen(self, ws):
-        """
-        连接建立成功
-        """
         print("【√】WebSocket连接成功.")
+        # 连接成功给客户端推送"LIVING"
+        self.callback(str('LIVING'))
         threading.Thread(target=self._sendHeartbeat).start()
 
+    """
+      监听抖音弹幕client推送的弹幕消息
+    """
     def _wsOnMessage(self, ws, message):
-        """
-        接收到数据
-        :param ws: websocket实例
-        :param message: 数据
-        """
-
         # 根据proto结构体解析对象
         package = PushFrame().parse(message)
         response = Response().parse(gzip.decompress(package.payload))
@@ -272,17 +277,51 @@ class DouyinLiveWebFetcher:
             method = msg.method
             try:
                 {
+                    'WebcastControlMessage': self._parseControlMsg,  # 直播间状态消息
                     'WebcastChatMessage': self._parseChatMsg,  # 聊天消息
                 }.get(method)(msg.payload)
             except Exception:
                 pass
 
+    """
+        [抖音WebSocket] 错误
+    """
     def _wsOnError(self, ws, error):
-        print("WebSocket error: ", error)
+        print("[抖音WebSocket] 错误:", error)
+        self._reconnect()
 
+    """
+        [抖音WebSocket] 连接关闭
+    """
     def _wsOnClose(self, ws, *args):
         self.get_room_status()
-        print("WebSocket connection closed.")
+        print("[抖音WebSocket] 连接关闭")
+        self._reconnect()
+
+    """
+       #监听抖音直播间状态变化
+    """
+    def _parseControlMsg(self, payload):
+        message = ControlMessage().parse(payload)
+        # 推送直播间状态给客户端
+        self.callback(str(message.status))
+        if message.status == 3:
+            print("直播间已结束")
+            self.stop()
+
+    """
+      抖音client重连
+    """
+    def _reconnect(self, delay=3):
+        if self._closed:
+            return  # 避免关闭后仍重连
+        print(f"[抖音WebSocket] 正在尝试重连中...（{delay}秒后）")
+        time.sleep(delay)
+        try:
+            self._connectWebSocket()
+        except Exception as e:
+            # 可增加重试次数限制，防止无限重试
+            print("[抖音WebSocket] 重连失败:", e)
 
     def _parseChatMsg(self, payload):
         """聊天消息"""
@@ -291,14 +330,47 @@ class DouyinLiveWebFetcher:
         user_id = message.user.id
         content = message.content
         dy_live_Id = message.common.room_id
-        print(f"【聊天msg】[{dy_live_Id}] [{user_id}]{user_name}: {content}")
         data = {
-            "type": "chat",
-            "user_id": message.user.id,
-            "username": message.user.nick_name,
-            "content": message.content,
-            "timestamp": time.time()
+            "msgId": str(uuid.uuid4()),
+            "dyMsgId": message.common.msg_id,
+            "danmuUserId": message.user.id,
+            "danmuUserName": message.user.nick_name,
+            "danmuContent": message.content,
+            "dyRoomId": message.common.room_id
         }
+
+        try:
+            # 1.从redis中获取弹幕用户编号信息
+            order_key = f"orderUser:dy_room_id_user:{dy_live_Id}:{user_id}"
+            tag_user_str = redis_client.get(order_key)
+            print(f"【redis里获取的userinfo】{tag_user_str}")
+            tag_user = TagUserVo.parse_from_redis(tag_user_str) if tag_user_str else None
+            if tag_user:
+                data["orderNumber"] = tag_user.orderNumber or ""
+            else:
+                print(f"⚠️ 无法解析标签信息: {tag_user_str}")
+                data["orderNumber"] = ""
+
+            # 2. 获取黑名单信息
+            black_str = redis_client.get(f"black:{user_id}")
+            print(f"【redis里获取的黑名单info】{black_str}")
+            if black_str:
+                black_vo = FsBlackRedisVo.parse_from_redis(black_str)
+            else:
+                black_vo = None
+
+            if black_vo:
+                data["blackLevel"] = str(black_vo.blackLevel)
+                data["createdUsers"] = black_vo.createdUsers
+            else:
+                data["blackLevel"] = "0"
+                data["createdUsers"] = []
+
+        except Exception as e:
+            print(f"❌ 标签信息获取失败: {e}")
+
+        print(f"【聊天msg】[{dy_live_Id}] [] [{user_id}]{user_name}: {content}")
+
         json_data = json.dumps(data, ensure_ascii=False)  # 转换为JSON字符串
         if self.callback:
             try:
@@ -306,10 +378,5 @@ class DouyinLiveWebFetcher:
             except Exception as e:
                 print(f"回调执行失败: {e}")
 
-    def _parseControlMsg(self, payload):
-        '''直播间状态消息'''
-        message = ControlMessage().parse(payload)
-        if message.status == 3:
-            print("直播间已结束")
-            self.stop()
-    
+
+

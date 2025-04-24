@@ -3,9 +3,9 @@ import json
 import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
-from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from liveMan import DouyinLiveWebFetcher
+from redis_helper import redis_client
 
 app = FastAPI()
 
@@ -27,7 +27,7 @@ class ConnectionManager:
                     self.fetchers[live_id] = DouyinLiveWebFetcher(live_id)
                     self.fetchers[live_id].start(
                         callback=lambda msg: asyncio.run_coroutine_threadsafe(
-                            self.broadcast(live_id, json.loads(msg)),  # 确保传入的是dict
+                            self.broadcast(live_id, msg),  # 确保传入的是dict
                             self.loop
                         )
                     )
@@ -35,7 +35,7 @@ class ConnectionManager:
             self.active_connections[live_id].add(websocket)
             # print(f"🟢 新客户端连接 ({len(self.active_connections[live_id])}个): {live_id}")
 
-    async def broadcast(self, live_id: str, message: dict):  # 注意参数类型改为dict
+    async def broadcast(self, live_id: str, message: str):  # 注意参数类型改为dict
         if live_id not in self.active_connections:
             print(f"⚠️ 无活跃连接: {live_id}")
             return
@@ -46,9 +46,9 @@ class ConnectionManager:
         for connection in clients:
             try:
                 # 确保转换为JSON字符串
-                json_message = json.dumps(message, ensure_ascii=False)
+                # json_message = json.dumps(message, ensure_ascii=False)
                 # print(f"✉️ 发送消息: {json_message[:100]}...")  # 打印前100字符
-                await connection.send_text(json_message)
+                await connection.send_text(message)
                 # print("✅ 发送成功")
             except Exception as e:
                 print(f"❌ 发送失败: {str(e)[:200]}")  # 截断长错误信息
@@ -88,12 +88,28 @@ async def websocket_endpoint(websocket: WebSocket, live_id: str):
             # 维持连接活跃
             data = await websocket.receive_text()
             print(f"收到客户端心跳: {data}")
+            # 心跳处理逻辑
+            if data == "ping":
+                print(f"收到客户端[{live_id}]心跳ping")
+                await websocket.send_text("pong")  # 发送pong响应
+                continue
     except WebSocketDisconnect:
-        print("客户端主动断开")
+        print("前端客户端主动断开")
         await manager.remove(websocket, live_id)
     except Exception as e:
-        print(f"连接异常: {e}")
+        print(f"前端连接异常: {e}")
         await manager.remove(websocket, live_id)
+
+
+
+@app.on_event("startup")
+def init_redis_check():
+    try:
+        redis_client.ping()
+        print("✅ Redis 连接成功")
+    except Exception as e:
+        print("❌ Redis 连接失败:", e)
+
 
 if __name__ == "__main__":
     import uvicorn
