@@ -372,11 +372,13 @@ class DouyinLiveWebFetcher:
         print(f"【聊天msg】[{dy_live_Id}] [] [{user_id}]{user_name}: {content}")
 
         json_data = json.dumps(data, ensure_ascii=False)  # 转换为JSON字符串
+        print(f"准备推送弹幕")
         if self.callback:
-            try:
-                self.callback(json_data)
-            except Exception as e:
-                print(f"回调执行失败: {e}")
+                print(f"可以推送弹幕")
+                try:
+                    self.callback(json_data)
+                except Exception as e:
+                    print(f"回调执行失败: {e}")
 
 
 
