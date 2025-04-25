@@ -86,9 +86,7 @@ async def websocket_endpoint(websocket: WebSocket, live_id: str):
     try:
         while True:
             # 维持连接活跃
-            print(f"================")
             data = await websocket.receive_text()
-            print(f"收到客户端心跳: {data}")
             # 心跳处理逻辑
             if data == "ping":
                 print(f"收到客户端[{live_id}]心跳ping")

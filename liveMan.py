@@ -332,11 +332,11 @@ class DouyinLiveWebFetcher:
         dy_live_Id = message.common.room_id
         data = {
             "msgId": str(uuid.uuid4()),
-            "dyMsgId": message.common.msg_id,
-            "danmuUserId": message.user.id,
+            "dyMsgId": str(message.common.msg_id),
+            "danmuUserId": str(message.user.id),
             "danmuUserName": message.user.nick_name,
             "danmuContent": message.content,
-            "dyRoomId": message.common.room_id
+            "dyRoomId": str(message.common.room_id)
         }
 
         try:
@@ -348,12 +348,10 @@ class DouyinLiveWebFetcher:
             if tag_user:
                 data["orderNumber"] = tag_user.orderNumber or ""
             else:
-                print(f"⚠️ 无法解析标签信息: {tag_user_str}")
                 data["orderNumber"] = ""
 
             # 2. 获取黑名单信息
             black_str = redis_client.get(f"black:{user_id}")
-            print(f"【redis里获取的黑名单info】{black_str}")
             if black_str:
                 black_vo = FsBlackRedisVo.parse_from_redis(black_str)
             else:
@@ -364,7 +362,7 @@ class DouyinLiveWebFetcher:
                 data["createdUsers"] = black_vo.createdUsers
             else:
                 data["blackLevel"] = "0"
-                data["createdUsers"] = []
+                data["createdUsers"] = "[]"
 
         except Exception as e:
             print(f"❌ 标签信息获取失败: {e}")
@@ -372,9 +370,7 @@ class DouyinLiveWebFetcher:
         print(f"【聊天msg】[{dy_live_Id}] [] [{user_id}]{user_name}: {content}")
 
         json_data = json.dumps(data, ensure_ascii=False)  # 转换为JSON字符串
-        print(f"准备推送弹幕")
         if self.callback:
-                print(f"可以推送弹幕")
                 try:
                     self.callback(json_data)
                 except Exception as e:
