@@ -27,11 +27,12 @@ class ConnectionManager:
                     self.fetchers[live_id] = DouyinLiveWebFetcher(live_id)
                     self.fetchers[live_id].start(
                         callback=lambda msg: asyncio.run_coroutine_threadsafe(
-                            self.broadcast(live_id, msg),  # 确保传入的是dict
+                            self.broadcast(live_id, msg),
                             self.loop
                         )
                     )
-
+            # 如果已经有抓取器，说明直播正在运行，直接给新连接发送 "LIVING"
+            await websocket.send_text("LIVING")
             self.active_connections[live_id].add(websocket)
             # print(f"🟢 新客户端连接 ({len(self.active_connections[live_id])}个): {live_id}")
 

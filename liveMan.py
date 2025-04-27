@@ -241,7 +241,6 @@ class DouyinLiveWebFetcher:
             try:
                 heartbeat = PushFrame(payload_type='hb').SerializeToString()
                 self.ws.send(heartbeat, websocket.ABNF.OPCODE_PING)
-                print("【√】发送心跳包")
             except Exception as e:
                 print("【X】心跳包发送失败: ", e)
                 break
@@ -252,8 +251,6 @@ class DouyinLiveWebFetcher:
     """
     def _wsOnOpen(self, ws):
         print("【√】WebSocket连接成功.")
-        # 连接成功给客户端推送"LIVING"
-        self.callback(str('LIVING'))
         threading.Thread(target=self._sendHeartbeat).start()
 
     """
@@ -343,7 +340,6 @@ class DouyinLiveWebFetcher:
             # 1.从redis中获取弹幕用户编号信息
             order_key = f"orderUser:dy_room_id_user:{dy_live_Id}:{user_id}"
             tag_user_str = redis_client.get(order_key)
-            print(f"【redis里获取的userinfo】{tag_user_str}")
             tag_user = TagUserVo.parse_from_redis(tag_user_str) if tag_user_str else None
             if tag_user:
                 data["orderNumber"] = tag_user.orderNumber or ""
@@ -366,8 +362,6 @@ class DouyinLiveWebFetcher:
 
         except Exception as e:
             print(f"❌ 标签信息获取失败: {e}")
-
-        print(f"【聊天msg】[{dy_live_Id}] [] [{user_id}]{user_name}: {content}")
 
         json_data = json.dumps(data, ensure_ascii=False)  # 转换为JSON字符串
         if self.callback:
